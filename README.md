@@ -53,15 +53,9 @@ ws.send(JSON.stringify({ [pb.authStore.record.id]: { x, y } }));
 
 ## Demo
 
-```sh
-./pocketsocket serve --dir demo/pb_data
-```
+A browser client, a `rooms` collection, a `/join` matchmaking hook, and a Fly deploy, in [demo](demo).
 
-Open http://127.0.0.1:8090 in two tabs and use the arrow keys. Each tab gets a random circle stored in `sessionStorage`, moves at 60 fps, and sends position and velocity at 10 Hz while moving. Other circles are dead-reckoned from their last packet. Closing a tab removes its circle.
-
-- `demo/pb_migrations` creates a public `rooms` collection.
-- `demo/pb_hooks/join.pb.js` adds `POST /join`, which returns the oldest room with a free seat or creates one. (In other words, run with `--max 2` to watch a third tab land in a new room.)
-- `demo/pb_public/index.html` is the whole client.
+Run it with `./pocketsocket serve --dir demo/pb_data` and open http://127.0.0.1:8090 in two tabs.
 
 ## License
 
