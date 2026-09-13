@@ -20,17 +20,23 @@ const me = JSON.parse(sessionStorage.me ??= JSON.stringify({
 }));
 me.vx = me.vy = 0;
 
-const all = { [id]: me };
-const ws = new WebSocket(`${location.origin.replace("http", "ws")}/ws/demo/demo00000000000/state`);
+let all = { [id]: me }, ws;
 const send = () => { sessionStorage.me = JSON.stringify(me); ws.send(JSON.stringify({ [id]: me })); };
-ws.onopen = send;
-ws.onmessage = e => {
-  for (const [k, v] of Object.entries(JSON.parse(e.data))) {
-    if (k === id) continue;
-    if (!v) { delete all[k]; continue; }
-    all[k] = { ...v, t: performance.now(), dx: all[k]?.dx ?? v.x, dy: all[k]?.dy ?? v.y };
-  }
-};
+async function join() {
+  const { room } = await (await fetch("/join", { method: "POST" })).json();
+  all = { [id]: me };
+  ws = new WebSocket(`${location.origin.replace("http", "ws")}/ws/rooms/${room}/state`);
+  ws.onopen = send;
+  ws.onclose = e => e.code === 1013 && join();
+  ws.onmessage = e => {
+    for (const [k, v] of Object.entries(JSON.parse(e.data))) {
+      if (k === id) continue;
+      if (!v) { delete all[k]; continue; }
+      all[k] = { ...v, t: performance.now(), dx: all[k]?.dx ?? v.x, dy: all[k]?.dy ?? v.y };
+    }
+  };
+}
+join();
 
 let keys = {};
 onkeydown = e => { if (e.key.startsWith("Arrow")) { keys[e.key] = true; e.preventDefault(); } };
@@ -40,7 +46,7 @@ onblur = () => keys = {};
 let wasMoving = false;
 setInterval(() => {
   const moving = me.vx || me.vy;
-  if (moving || wasMoving) send();
+  if ((moving || wasMoving) && ws?.readyState === 1) send();
   wasMoving = moving;
 }, 1000 / HZ);
 

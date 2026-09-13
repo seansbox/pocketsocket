@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"slices"
+	"strings"
 	"sync"
 	"time"
 
@@ -55,6 +56,7 @@ func main() {
 	migratecmd.MustRegister(app, app.RootCmd, migratecmd.Config{TemplateLang: migratecmd.TemplateLangJS, Automigrate: true})
 
 	app.OnServe().BindFunc(func(se *core.ServeEvent) error {
+		app.Store().Set("pocketsocket:max", max)
 		se.Router.GET("/ws/{collection}/{id}/{field}", serve)
 		se.Router.GET("/{path...}", apis.Static(os.DirFS(publicDir), true))
 		go func() {
@@ -95,7 +97,8 @@ func serve(e *core.RequestEvent) error {
 	canWrite, _ := app.CanAccessRecord(rec, info, rec.Collection().UpdateRule)
 	key := [3]string{rec.Collection().Name, rec.Id, field}
 	if e.Request.Header.Get("Upgrade") == "" {
-		return e.JSON(200, map[string]int{"connections": occupancy(key), "max": max})
+		n, _ := app.Store().Get(storeKey(key)).(int)
+		return e.JSON(200, map[string]int{"connections": n, "max": max})
 	}
 
 	conn, err := websocket.Accept(e.Response, e.Request, &websocket.AcceptOptions{OriginPatterns: []string{"*"}})
@@ -127,30 +130,35 @@ func serve(e *core.RequestEvent) error {
 			continue
 		}
 		var patch map[string]json.RawMessage
-		if !canWrite || json.Unmarshal(msg, &patch) != nil {
-			continue
+		if canWrite && json.Unmarshal(msg, &patch) == nil {
+			b.apply(patch, msg, conn)
 		}
-		b.mu.Lock()
-		grow := 0
-		for k, v := range patch {
-			grow += weight(k, v) - weight(k, b.state[k])
-		}
-		if b.size+grow <= b.limit {
-			for k, v := range patch {
-				if string(v) == "null" {
-					delete(b.state, k)
-					delete(b.owner, k)
-				} else {
-					b.state[k] = v
-					b.owner[k] = conn
-				}
-			}
-			b.size += grow
-			b.dirty = true
-			b.broadcast(msg, conn)
-		}
-		b.mu.Unlock()
 	}
+}
+
+// apply merges a patch and relays it, unless it would push the state past the field's size limit.
+func (b *buffer) apply(patch map[string]json.RawMessage, msg []byte, from *websocket.Conn) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	grow := 0
+	for k, v := range patch {
+		grow += weight(k, v) - weight(k, b.state[k])
+	}
+	if b.size+grow > b.limit {
+		return
+	}
+	for k, v := range patch {
+		if string(v) == "null" {
+			delete(b.state, k)
+			delete(b.owner, k)
+		} else {
+			b.state[k] = v
+			b.owner[k] = from
+		}
+	}
+	b.size += grow
+	b.dirty = true
+	b.broadcast(msg, from)
 }
 
 // keepalive pings until the connection dies or the handler returns.
@@ -195,19 +203,6 @@ func (b *buffer) broadcast(msg []byte, except *websocket.Conn) {
 	}
 }
 
-// occupancy is how many connections currently share a buffer.
-func occupancy(key [3]string) int {
-	mu.Lock()
-	defer mu.Unlock()
-	b := buffers[key]
-	if b == nil {
-		return 0
-	}
-	b.mu.Lock()
-	defer b.mu.Unlock()
-	return len(b.conns)
-}
-
 // join finds or loads the buffer and sends the caller a snapshot. Returns nil if the buffer is full.
 func join(rec *core.Record, key [3]string, conn *websocket.Conn) *buffer {
 	mu.Lock()
@@ -216,6 +211,9 @@ func join(rec *core.Record, key [3]string, conn *websocket.Conn) *buffer {
 	if b == nil {
 		b = &buffer{key: key, state: map[string]json.RawMessage{}, owner: map[string]*websocket.Conn{}, conns: map[*websocket.Conn]bool{}}
 		json.Unmarshal([]byte(rec.GetString(key[2])), &b.state)
+		if b.state == nil { // the field was null
+			b.state = map[string]json.RawMessage{}
+		}
 		b.size = len(rec.GetString(key[2]))
 		b.limit = int(rec.Collection().Fields.GetByName(key[2]).(*core.JSONField).CalculateMaxBodySize())
 		buffers[key] = b
@@ -226,6 +224,7 @@ func join(rec *core.Record, key [3]string, conn *websocket.Conn) *buffer {
 		return nil
 	}
 	b.conns[conn] = true
+	app.Store().Set(storeKey(key), len(b.conns))
 	snap, _ := json.Marshal(b.state)
 	write(conn, snap)
 	return b
@@ -238,6 +237,7 @@ func leave(b *buffer, conn *websocket.Conn) {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	delete(b.conns, conn)
+	app.Store().Set(storeKey(b.key), len(b.conns))
 	gone := map[string]any{}
 	for k, c := range b.owner {
 		if c == conn {
@@ -255,7 +255,13 @@ func leave(b *buffer, conn *websocket.Conn) {
 	if len(b.conns) == 0 {
 		b.save()
 		delete(buffers, b.key)
+		app.Store().Remove(storeKey(b.key))
 	}
+}
+
+// storeKey names a buffer's connection count in app.Store(), where pb_hooks can read it.
+func storeKey(key [3]string) string {
+	return "pocketsocket:" + strings.Join(key[:], "/")
 }
 
 // flushAll saves dirty buffers. Grab the list under mu, then save one at a time.

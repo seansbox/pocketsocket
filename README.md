@@ -36,7 +36,7 @@ ws://host/ws/{collection}/{recordId}/{field}?token={authToken}
 
 - The collection's `viewRule` decides who can connect and `updateRule` who can send. `token` is the SDK's `pb.authStore.token`, optional for public rules, and stripped from the request log.
 - On connect the server sends the field's current value as one JSON object.
-- A plain GET on the same URL, no upgrade, returns `{"connections": n, "max": N}`. Use it from `pb_hooks` or a client to pick a room with space.
+- A plain GET on the same URL, no upgrade, returns `{"connections": n, "max": N}`. Hooks can read the same numbers without a request from `$app.store()`, under `pocketsocket:{collection}/{id}/{field}` and `pocketsocket:max`.
 - Send any JSON object. Its top level keys are merged into the shared object and the message is relayed as is to every other client. A `null` value deletes the key. Anything else is dropped.
 - A key belongs to the connection that last wrote it. When that connection closes the key is deleted and `null` is relayed for it. Keys loaded from the record have no owner and stay.
 - While a buffer is live its field belongs to the socket. REST writes to that field are overwritten at the next flush. Other fields are untouched.
@@ -57,7 +57,8 @@ ws.send(JSON.stringify({ [pb.authStore.record.id]: { x, y } }));
 
 Open http://127.0.0.1:8090 in two tabs and use the arrow keys. Each tab gets a random circle stored in `sessionStorage`, moves at 60 fps, and sends position and velocity at 10 Hz while moving. Other circles are dead-reckoned from their last packet. Closing a tab removes its circle.
 
-- `demo/pb_migrations` creates a public `demo` collection and one record.
+- `demo/pb_migrations` creates a public `rooms` collection.
+- `demo/pb_hooks/join.pb.js` adds `POST /join`, which returns the oldest room with a free seat or creates one. (In other words, run with `--max 2` to watch a third tab land in a new room.)
 - `demo/pb_public/index.html` is the whole client.
 
 ## License
