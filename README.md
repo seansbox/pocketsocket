@@ -19,7 +19,7 @@ go build -o pocketsocket .
 ./pocketsocket serve
 ```
 
-[PocketBase commands and flags](https://pocketbase.io/docs/going-to-production/) apply. `pb_public`, `pb_hooks`, and `pb_migrations` are siblings of `pb_data`, so they follow `--dir`.
+Or download a binary from [releases](../../releases). [PocketBase commands and flags](https://pocketbase.io/docs/going-to-production/) apply. `pb_public`, `pb_hooks`, and `pb_migrations` are siblings of `pb_data`, so they follow `--dir`.
 
 - `--flush` how often state is written, default `30s`. `0` writes only when the last client disconnects and on shutdown.
 - `--ping` how often connections are pinged, default `30s`. `0` disables. An unanswered ping closes the connection after 5s, so keep this below your proxy's idle timeout.
