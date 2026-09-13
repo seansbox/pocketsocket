@@ -43,11 +43,13 @@ onkeydown = e => { if (e.key.startsWith("Arrow")) { keys[e.key] = true; e.preven
 onkeyup = e => keys[e.key] = false;
 onblur = () => keys = {};
 
-let wasMoving = false;
+let moved = false, sentMoving = false;
 setInterval(() => {
-  const moving = me.vx || me.vy;
-  if ((moving || wasMoving) && ws?.readyState === 1) send();
-  wasMoving = moving;
+  if ((moved || sentMoving) && ws?.readyState === 1) {
+    send();
+    sentMoving = !!(me.vx || me.vy);
+    moved = false;
+  }
 }, 1000 / HZ);
 
 let last = performance.now();
@@ -58,6 +60,7 @@ requestAnimationFrame(function frame(now) {
   me.vy = (!!keys.ArrowDown - !!keys.ArrowUp) * SPEED;
   me.x = clamp(me.x + me.vx * dt, W, me.r);
   me.y = clamp(me.y + me.vy * dt, H, me.r);
+  moved ||= !!(me.vx || me.vy);
 
   g.clearRect(0, 0, W, H);
   for (const [k, p] of Object.entries(all)) {
