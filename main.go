@@ -28,6 +28,8 @@ type buffer struct {
 	state map[string]json.RawMessage
 	owner map[string]*websocket.Conn
 	conns map[*websocket.Conn]bool
+	size  int // approximate bytes of state, checked against the field's max size
+	limit int
 	dirty bool
 }
 
@@ -36,16 +38,18 @@ var (
 	flush   time.Duration
 	ping    time.Duration
 	rate    int
+	max     int
 	mu      sync.Mutex
 	buffers = map[[3]string]*buffer{}
 )
 
-// main wires up stock PocketBase, the /ws route and the flush ticker.
+// main wires up stock PocketBase, the /ws route, the flush ticker and four flags.
 func main() {
 	var publicDir string
 	app.RootCmd.PersistentFlags().DurationVar(&flush, "flush", 30*time.Second, "how often buffered state is written to the db, 0 to only write on disconnect")
 	app.RootCmd.PersistentFlags().DurationVar(&ping, "ping", 30*time.Second, "how often websocket connections are pinged, 0 to disable")
 	app.RootCmd.PersistentFlags().IntVar(&rate, "rate", 60, "max messages per second per connection, 0 to disable")
+	app.RootCmd.PersistentFlags().IntVar(&max, "max", 100, "max connections per record field, 0 for unlimited")
 	app.RootCmd.PersistentFlags().StringVar(&publicDir, "publicDir", filepath.Join(app.DataDir(), "../pb_public"), "the directory to serve static files")
 	jsvm.MustRegister(app, jsvm.Config{HooksWatch: true, HooksPoolSize: 15})
 	migratecmd.MustRegister(app, app.RootCmd, migratecmd.Config{TemplateLang: migratecmd.TemplateLangJS, Automigrate: true})
@@ -81,17 +85,18 @@ func serve(e *core.RequestEvent) error {
 		return e.NotFoundError("", err)
 	}
 	field := e.Request.PathValue("field")
-	if rec.Collection().Fields.GetByName(field) == nil {
+	if _, ok := rec.Collection().Fields.GetByName(field).(*core.JSONField); !ok {
 		return e.NotFoundError("", nil)
 	}
-	info, err := e.RequestInfo()
-	if err != nil {
-		return e.BadRequestError("", err)
-	}
+	info, _ := e.RequestInfo() // cannot fail on a bodiless GET
 	if ok, _ := app.CanAccessRecord(rec, info, rec.Collection().ViewRule); !ok {
 		return e.ForbiddenError("", nil)
 	}
 	canWrite, _ := app.CanAccessRecord(rec, info, rec.Collection().UpdateRule)
+	key := [3]string{rec.Collection().Name, rec.Id, field}
+	if e.Request.Header.Get("Upgrade") == "" {
+		return e.JSON(200, map[string]int{"connections": occupancy(key), "max": max})
+	}
 
 	conn, err := websocket.Accept(e.Response, e.Request, &websocket.AcceptOptions{OriginPatterns: []string{"*"}})
 	if err != nil {
@@ -102,11 +107,14 @@ func serve(e *core.RequestEvent) error {
 	ctx := e.Request.Context() // cancelled when this handler returns
 	go keepalive(ctx, conn)
 
-	b := join(rec, field, conn)
+	b := join(rec, key, conn)
+	if b == nil {
+		conn.Close(websocket.StatusTryAgainLater, "full")
+		return nil
+	}
 	defer leave(b, conn)
 
-	var n int
-	window := time.Now()
+	n, window := 0, time.Now()
 	for {
 		_, msg, err := conn.Read(ctx)
 		if err != nil {
@@ -123,17 +131,24 @@ func serve(e *core.RequestEvent) error {
 			continue
 		}
 		b.mu.Lock()
+		grow := 0
 		for k, v := range patch {
-			if string(v) == "null" {
-				delete(b.state, k)
-				delete(b.owner, k)
-			} else {
-				b.state[k] = v
-				b.owner[k] = conn
-			}
+			grow += weight(k, v) - weight(k, b.state[k])
 		}
-		b.dirty = true
-		b.broadcast(msg, conn)
+		if b.size+grow <= b.limit {
+			for k, v := range patch {
+				if string(v) == "null" {
+					delete(b.state, k)
+					delete(b.owner, k)
+				} else {
+					b.state[k] = v
+					b.owner[k] = conn
+				}
+			}
+			b.size += grow
+			b.dirty = true
+			b.broadcast(msg, conn)
+		}
 		b.mu.Unlock()
 	}
 }
@@ -156,6 +171,14 @@ func keepalive(ctx context.Context, conn *websocket.Conn) {
 	}
 }
 
+// weight is what a key costs in the marshalled state. A missing or null value costs nothing.
+func weight(k string, v json.RawMessage) int {
+	if v == nil || string(v) == "null" {
+		return 0
+	}
+	return len(k) + len(v) + 4 // quotes, colon, comma
+}
+
 // write is Write with a deadline. A stuck client must not hold a buffer lock.
 func write(conn *websocket.Conn, msg []byte) {
 	ctx, cancel := context.WithTimeout(context.Background(), writeTimeout)
@@ -172,19 +195,36 @@ func (b *buffer) broadcast(msg []byte, except *websocket.Conn) {
 	}
 }
 
-// join finds or loads the buffer for a field and sends the caller a snapshot.
-func join(rec *core.Record, field string, conn *websocket.Conn) *buffer {
+// occupancy is how many connections currently share a buffer.
+func occupancy(key [3]string) int {
 	mu.Lock()
 	defer mu.Unlock()
-	key := [3]string{rec.Collection().Name, rec.Id, field}
+	b := buffers[key]
+	if b == nil {
+		return 0
+	}
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return len(b.conns)
+}
+
+// join finds or loads the buffer and sends the caller a snapshot. Returns nil if the buffer is full.
+func join(rec *core.Record, key [3]string, conn *websocket.Conn) *buffer {
+	mu.Lock()
+	defer mu.Unlock()
 	b := buffers[key]
 	if b == nil {
 		b = &buffer{key: key, state: map[string]json.RawMessage{}, owner: map[string]*websocket.Conn{}, conns: map[*websocket.Conn]bool{}}
-		json.Unmarshal([]byte(rec.GetString(field)), &b.state)
+		json.Unmarshal([]byte(rec.GetString(key[2])), &b.state)
+		b.size = len(rec.GetString(key[2]))
+		b.limit = int(rec.Collection().Fields.GetByName(key[2]).(*core.JSONField).CalculateMaxBodySize())
 		buffers[key] = b
 	}
 	b.mu.Lock()
 	defer b.mu.Unlock()
+	if max > 0 && len(b.conns) >= max {
+		return nil
+	}
 	b.conns[conn] = true
 	snap, _ := json.Marshal(b.state)
 	write(conn, snap)
@@ -202,6 +242,7 @@ func leave(b *buffer, conn *websocket.Conn) {
 	for k, c := range b.owner {
 		if c == conn {
 			gone[k] = nil
+			b.size -= weight(k, b.state[k])
 			delete(b.state, k)
 			delete(b.owner, k)
 		}
