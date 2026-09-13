@@ -18,7 +18,7 @@ jobs:
       - run: |
           for t in darwin/arm64 darwin/amd64 linux/amd64 linux/arm64 windows/amd64; do
             bin=pocketsocket; [ ${t%/*} = windows ] && bin=pocketsocket.exe
-            CGO_ENABLED=0 GOOS=${t%/*} GOARCH=${t#*/} go build -ldflags="-s -w" -o $bin .
+            CGO_ENABLED=0 GOOS=${t%/*} GOARCH=${t#*/} go build -ldflags="-s -w -X main.version=${GITHUB_REF_NAME#v}" -o $bin .
             zip pocketsocket_${GITHUB_REF_NAME#v}_${t/\//_}.zip $bin
             rm $bin
           done

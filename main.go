@@ -22,6 +22,8 @@ import (
 
 const writeTimeout = 5 * time.Second
 
+var version = "dev" // set by the release workflow with -ldflags "-X main.version=..."
+
 // buffer holds one record field in memory while anyone is connected to it.
 type buffer struct {
 	mu    sync.Mutex
@@ -47,6 +49,7 @@ var (
 // main wires up stock PocketBase, the /ws route, the flush ticker and four flags.
 func main() {
 	var publicDir string
+	app.RootCmd.Version = version
 	app.RootCmd.PersistentFlags().DurationVar(&flush, "flush", 30*time.Second, "how often buffered state is written to the db, 0 to only write on disconnect")
 	app.RootCmd.PersistentFlags().DurationVar(&ping, "ping", 30*time.Second, "how often websocket connections are pinged, 0 to disable")
 	app.RootCmd.PersistentFlags().IntVar(&rate, "rate", 60, "max messages per second per connection, 0 to disable")
