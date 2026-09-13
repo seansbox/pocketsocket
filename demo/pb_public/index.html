@@ -7,50 +7,39 @@ canvas{width:min(100vw - 32px, (100vh - 32px) * 4 / 3);border:2px solid #444;box
 <canvas id="c" width="800" height="600"></canvas>
 <script>
 const W = 800, H = 600, SPEED = 240, HZ = 10, MAX_PREDICT = 0.3, SMOOTH = 10;
-const g = c.getContext("2d");
+const g = c.getContext("2d"); g.font = "12px system-ui"; g.textAlign = "center";
 const pick = a => a[Math.random() * a.length | 0];
 const clamp = (v, max, r) => Math.max(r, Math.min(max - r, v));
 
 const id = sessionStorage.id ??= Math.random().toString(36).slice(2, 10);
 const me = JSON.parse(sessionStorage.me ??= JSON.stringify({
-  x: Math.random() * W | 0,
-  y: Math.random() * H | 0,
-  vx: 0,
-  vy: 0,
-  r: 10 + Math.random() * 20 | 0,
+  x: Math.random() * W | 0, y: Math.random() * H | 0, r: 10 + Math.random() * 20 | 0,
   c: `hsl(${Math.random() * 360 | 0} 70% 55%)`,
   n: pick(["torchlit", "cursed", "hexed", "grim", "gloomy", "feral", "sunken", "gilded"]) + " " +
      pick(["kobold", "goblin", "stirge", "mimic", "owlbear", "wyvern", "ghoul", "hag"]),
 }));
 me.vx = me.vy = 0;
 
-const all = { [id]: me }, view = {};
-const ws = new WebSocket(`${location.protocol === "https:" ? "wss" : "ws"}://${location.host}/ws/demo/demo00000000000/state`);
+const all = { [id]: me };
+const ws = new WebSocket(`${location.origin.replace("http", "ws")}/ws/demo/demo00000000000/state`);
+const send = () => { sessionStorage.me = JSON.stringify(me); ws.send(JSON.stringify({ [id]: me })); };
 ws.onopen = send;
 ws.onmessage = e => {
-  const now = performance.now();
   for (const [k, v] of Object.entries(JSON.parse(e.data))) {
     if (k === id) continue;
-    if (v === null) { delete all[k]; delete view[k]; continue; }
-    v.t = now;
-    all[k] = v;
-    view[k] ??= { x: v.x, y: v.y };
+    if (!v) { delete all[k]; continue; }
+    all[k] = { ...v, t: performance.now(), dx: all[k]?.dx ?? v.x, dy: all[k]?.dy ?? v.y };
   }
 };
 
-const keys = {};
+let keys = {};
 onkeydown = e => { if (e.key.startsWith("Arrow")) { keys[e.key] = true; e.preventDefault(); } };
 onkeyup = e => keys[e.key] = false;
-onblur = () => { for (const k in keys) keys[k] = false; };
-
-function send() {
-  sessionStorage.me = JSON.stringify(me);
-  ws.send(JSON.stringify({ [id]: me }));
-}
+onblur = () => keys = {};
 
 let wasMoving = false;
 setInterval(() => {
-  const moving = !!(me.vx || me.vy);
+  const moving = me.vx || me.vy;
   if (moving || wasMoving) send();
   wasMoving = moving;
 }, 1000 / HZ);
@@ -65,15 +54,12 @@ requestAnimationFrame(function frame(now) {
   me.y = clamp(me.y + me.vy * dt, H, me.r);
 
   g.clearRect(0, 0, W, H);
-  g.font = "12px system-ui";
-  g.textAlign = "center";
   for (const [k, p] of Object.entries(all)) {
     let { x, y } = p;
     if (k !== id) {
-      const age = Math.min((now - p.t) / 1000, MAX_PREDICT), a = Math.min(1, dt * SMOOTH), v = view[k];
-      v.x += (clamp(p.x + p.vx * age, W, p.r) - v.x) * a;
-      v.y += (clamp(p.y + p.vy * age, H, p.r) - v.y) * a;
-      ({ x, y } = v);
+      const age = Math.min((now - p.t) / 1000, MAX_PREDICT), a = Math.min(1, dt * SMOOTH);
+      x = p.dx += (clamp(p.x + p.vx * age, W, p.r) - p.dx) * a;
+      y = p.dy += (clamp(p.y + p.vy * age, H, p.r) - p.dy) * a;
     }
     g.fillStyle = p.c;
     g.beginPath();
