@@ -19,6 +19,8 @@ go build -o pocketsocket .
 ./pocketsocket serve
 ```
 
+`make` does the same with the version stamped from the latest git tag, `make VERSION=1.2.3` picks one, and `make dist` builds the release zips.
+
 Or download a binary from [releases](../../releases). [PocketBase commands and flags](https://pocketbase.io/docs/going-to-production/) apply. `pb_public`, `pb_hooks`, and `pb_migrations` are siblings of `pb_data`, so they follow `--dir`.
 
 - `--flush` how often state is written, default `30s`. `0` writes only when the last client disconnects and on shutdown.
