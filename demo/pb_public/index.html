@@ -1,0 +1,87 @@
+<!doctype html>
+<title>PocketSocket demo</title>
+<style>
+body{margin:0;background:#111;height:100vh;display:flex;align-items:center;justify-content:center}
+canvas{width:min(100vw - 32px, (100vh - 32px) * 4 / 3);border:2px solid #444;box-sizing:border-box}
+</style>
+<canvas id="c" width="800" height="600"></canvas>
+<script>
+const W = 800, H = 600, SPEED = 240, HZ = 10, MAX_PREDICT = 0.3, SMOOTH = 10;
+const g = c.getContext("2d");
+const pick = a => a[Math.random() * a.length | 0];
+const clamp = (v, max, r) => Math.max(r, Math.min(max - r, v));
+
+const id = sessionStorage.id ??= Math.random().toString(36).slice(2, 10);
+const me = JSON.parse(sessionStorage.me ??= JSON.stringify({
+  x: Math.random() * W | 0,
+  y: Math.random() * H | 0,
+  vx: 0,
+  vy: 0,
+  r: 10 + Math.random() * 20 | 0,
+  c: `hsl(${Math.random() * 360 | 0} 70% 55%)`,
+  n: pick(["torchlit", "cursed", "hexed", "grim", "gloomy", "feral", "sunken", "gilded"]) + " " +
+     pick(["kobold", "goblin", "stirge", "mimic", "owlbear", "wyvern", "ghoul", "hag"]),
+}));
+me.vx = me.vy = 0;
+
+const all = { [id]: me }, view = {};
+const ws = new WebSocket(`${location.protocol === "https:" ? "wss" : "ws"}://${location.host}/ws/demo/demo00000000000/state`);
+ws.onopen = send;
+ws.onmessage = e => {
+  const now = performance.now();
+  for (const [k, v] of Object.entries(JSON.parse(e.data))) {
+    if (k === id) continue;
+    if (v === null) { delete all[k]; delete view[k]; continue; }
+    v.t = now;
+    all[k] = v;
+    view[k] ??= { x: v.x, y: v.y };
+  }
+};
+
+const keys = {};
+onkeydown = e => { if (e.key.startsWith("Arrow")) { keys[e.key] = true; e.preventDefault(); } };
+onkeyup = e => keys[e.key] = false;
+onblur = () => { for (const k in keys) keys[k] = false; };
+
+function send() {
+  sessionStorage.me = JSON.stringify(me);
+  ws.send(JSON.stringify({ [id]: me }));
+}
+
+let wasMoving = false;
+setInterval(() => {
+  const moving = !!(me.vx || me.vy);
+  if (moving || wasMoving) send();
+  wasMoving = moving;
+}, 1000 / HZ);
+
+let last = performance.now();
+requestAnimationFrame(function frame(now) {
+  const dt = (now - last) / 1000;
+  last = now;
+  me.vx = (!!keys.ArrowRight - !!keys.ArrowLeft) * SPEED;
+  me.vy = (!!keys.ArrowDown - !!keys.ArrowUp) * SPEED;
+  me.x = clamp(me.x + me.vx * dt, W, me.r);
+  me.y = clamp(me.y + me.vy * dt, H, me.r);
+
+  g.clearRect(0, 0, W, H);
+  g.font = "12px system-ui";
+  g.textAlign = "center";
+  for (const [k, p] of Object.entries(all)) {
+    let { x, y } = p;
+    if (k !== id) {
+      const age = Math.min((now - p.t) / 1000, MAX_PREDICT), a = Math.min(1, dt * SMOOTH), v = view[k];
+      v.x += (clamp(p.x + p.vx * age, W, p.r) - v.x) * a;
+      v.y += (clamp(p.y + p.vy * age, H, p.r) - v.y) * a;
+      ({ x, y } = v);
+    }
+    g.fillStyle = p.c;
+    g.beginPath();
+    g.arc(x, y, p.r, 0, Math.PI * 2);
+    g.fill();
+    g.fillStyle = "#eee";
+    g.fillText(p.n, x, y - p.r - 4);
+  }
+  requestAnimationFrame(frame);
+});
+</script>
