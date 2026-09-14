@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/coder/websocket"
+	"github.com/fatih/color"
 	"github.com/pocketbase/pocketbase"
 	"github.com/pocketbase/pocketbase/apis"
 	"github.com/pocketbase/pocketbase/core"
@@ -21,8 +22,6 @@ import (
 )
 
 const writeTimeout = 5 * time.Second
-
-var version = "dev" // set by the release workflow with -ldflags "-X main.version=..."
 
 // buffer holds one record field in memory while anyone is connected to it.
 type buffer struct {
@@ -37,6 +36,7 @@ type buffer struct {
 }
 
 var (
+	version = "dev" // set by the release workflow with -ldflags "-X main.version=..."
 	app     = pocketbase.New()
 	flush   time.Duration
 	ping    time.Duration
@@ -59,6 +59,13 @@ func main() {
 	migratecmd.MustRegister(app, app.RootCmd, migratecmd.Config{TemplateLang: migratecmd.TemplateLangJS, Automigrate: true})
 
 	app.OnServe().BindFunc(func(se *core.ServeEvent) error {
+		se.InstallerFunc = func(_ core.App, su *core.Record, baseURL string) error { // apis.DefaultInstallerFunc without opening a browser
+			token, err := su.NewStaticAuthToken(30 * time.Minute)
+			color.Magenta("\n(!) Launch the URL below in the browser to create your first superuser account:")
+			color.New(color.Bold, color.FgCyan).Printf("%s/_/#/pbinstall/%s\n", strings.TrimRight(baseURL, "/"), token)
+			color.New(color.FgHiBlack, color.Italic).Printf("(you can also create your first superuser by running: %s superuser upsert EMAIL PASS)\n\n", os.Args[0])
+			return err
+		}
 		app.Store().Set("pocketsocket:max", max)
 		se.Router.GET("/ws/{collection}/{id}/{field}", serve)
 		se.Router.GET("/{path...}", apis.Static(os.DirFS(publicDir), true))
@@ -109,7 +116,6 @@ func serve(e *core.RequestEvent) error {
 		return err
 	}
 	defer conn.CloseNow()
-
 	ctx := e.Request.Context() // cancelled when this handler returns
 	go keepalive(ctx, conn)
 
@@ -129,11 +135,8 @@ func serve(e *core.RequestEvent) error {
 		if now := time.Now(); now.Sub(window) >= time.Second {
 			window, n = now, 0
 		}
-		if n++; rate > 0 && n > rate {
-			continue
-		}
 		var patch map[string]json.RawMessage
-		if canWrite && json.Unmarshal(msg, &patch) == nil {
+		if n++; (rate == 0 || n <= rate) && canWrite && json.Unmarshal(msg, &patch) == nil {
 			b.apply(patch, msg, conn)
 		}
 	}
@@ -212,9 +215,8 @@ func join(rec *core.Record, key [3]string, conn *websocket.Conn) *buffer {
 	defer mu.Unlock()
 	b := buffers[key]
 	if b == nil {
-		b = &buffer{key: key, state: map[string]json.RawMessage{}, owner: map[string]*websocket.Conn{}, conns: map[*websocket.Conn]bool{}}
-		json.Unmarshal([]byte(rec.GetString(key[2])), &b.state)
-		if b.state == nil { // the field was null
+		b = &buffer{key: key, owner: map[string]*websocket.Conn{}, conns: map[*websocket.Conn]bool{}}
+		if json.Unmarshal([]byte(rec.GetString(key[2])), &b.state); b.state == nil { // the field was null
 			b.state = map[string]json.RawMessage{}
 		}
 		b.size = len(rec.GetString(key[2]))

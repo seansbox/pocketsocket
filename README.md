@@ -8,7 +8,7 @@ But, why?! I love PocketBase and think it actually makes a pretty good game back
 
 - Everything is stock PocketBase: auth, collections, API rules, admin UI, SDKs, `pb_hooks`, `pb_migrations`, `pb_public`. `main.go` is a [PocketBase Go app](https://pocketbase.io/docs/go-overview/), so you would extend it the same way.
 - Added one route, four flags, one dependency. No schema, no game logic, no protocol beyond JSON.
-- Removed the `update` command, which would replace the binary with stock PocketBase. `hooksDir`, `hooksWatch`, `hooksPool`, `migrationsDir`, `automigrate`, and `indexFallback` are stock defaults. Add any back with one line from [examples/base/main.go](https://github.com/pocketbase/pocketbase/blob/master/examples/base/main.go).
+- Removed the `update` command, which would replace the binary with stock PocketBase, and the `hooksDir`, `hooksWatch`, `hooksPool`, `migrationsDir`, `automigrate`, and `indexFallback` flags. Their stock defaults are hardcoded. Add any back with one line from examples/base/main.go.
 - State lives in memory while anyone is connected. Every write to the record is a normal save, so [realtime subscriptions](https://pocketbase.io/docs/api-realtime/) and hooks fire at flush cadence.
 - Single process, same as PocketBase.
 
@@ -56,6 +56,20 @@ ws.send(JSON.stringify({ [pb.authStore.record.id]: { x, y } }));
 A browser client, a `rooms` collection, a `/join` matchmaking hook, and a Fly deploy, in [demo](demo).
 
 Run it with `./pocketsocket serve --dir demo/pb_data` and open http://127.0.0.1:8090 in two tabs.
+
+## Release
+
+Putting here because I keep forgetting how to do it. Push `main`, then push a `v` tag. The [release workflow](.github/workflows/release.yml) runs `make dist` and attaches the zips to a GitHub release.
+
+```sh
+git describe --tags --abbrev=0   # last release
+git tag v0.5.0
+git push origin v0.5.0
+```
+
+- The binary's version is the tag without the `v`, so `pocketsocket --version` prints `0.5.0`. Untagged builds print something like `0.4.0-3-ge7f9853`.
+- `make dist VERSION=0.5.0` builds the same zips locally in `dist/` without releasing.
+- Bad tag? `git push --delete origin v0.5.0 && git tag -d v0.5.0`, delete the GitHub release, and tag again.
 
 ## License
 

@@ -4,6 +4,7 @@ go 1.27
 
 require (
 	github.com/coder/websocket v1.8.15
+	github.com/fatih/color v1.19.0
 	github.com/pocketbase/pocketbase v0.40.4
 )
 
@@ -16,7 +17,6 @@ require (
 	github.com/dop251/goja v0.0.0-20260901132549-43234fa61381 // indirect
 	github.com/dop251/goja_nodejs v0.0.0-20260212111938-1f56ff5bcf14 // indirect
 	github.com/dustin/go-humanize v1.0.1 // indirect
-	github.com/fatih/color v1.19.0 // indirect
 	github.com/fsnotify/fsnotify v1.10.1 // indirect
 	github.com/gabriel-vasile/mimetype v1.4.15 // indirect
 	github.com/ganigeorgiev/fexpr v0.6.0 // indirect
